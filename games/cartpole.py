@@ -136,7 +136,7 @@ class Game(AbstractGame):
     def __init__(self, seed=None):
         self.env = gym.make("CartPole-v1")
         if seed is not None:
-            self.env.seed(seed)
+            obs, info = self.env.reset(seed=0)
 
     def step(self, action):
         """
