@@ -1,3 +1,5 @@
+import random
+
 from utils import *
 import datetime
 import pathlib
@@ -10,7 +12,7 @@ from dwave.samplers import SimulatedAnnealingSampler
 from .abstract_game import AbstractGame
 
 args = dotdict({
-    'game_variant': 'tangled_K3',
+    'game_variant': 'tangled_P',
 })
 
 class MuZeroConfig:
@@ -24,8 +26,8 @@ class MuZeroConfig:
 
 
         ### Game
-        self.observation_shape = (3, 3, 4)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(3*3+3))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (3, 10, 11)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(range(3*15+10))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(2))  # List of players. You should only edit the length
         self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
 
@@ -38,13 +40,13 @@ class MuZeroConfig:
         ### Self-Play
         self.num_workers = 24  # Number of simultaneous threads/workers self-playing to feed the replay buffer
         self.selfplay_on_gpu = False
-        self.max_moves = 5  # Maximum number of moves if game is not finished before
-        self.num_simulations = 12  # Number of future moves self-simulated
+        self.max_moves = 17  # Maximum number of moves if game is not finished before
+        self.num_simulations = 400  # Number of future moves self-simulated
         self.discount = 1  # Chronological discount of the reward
         self.temperature_threshold = None  # Number of moves before dropping the temperature given by visit_softmax_temperature_fn to 0 (ie selecting the best action). If None, visit_softmax_temperature_fn is used every time
 
         # Root prior exploration noise
-        self.root_dirichlet_alpha = 0.1
+        self.root_dirichlet_alpha = 0.3
         self.root_exploration_fraction = 0.25
 
         # UCB formula
@@ -59,20 +61,20 @@ class MuZeroConfig:
 
         # Residual Network
         self.downsample = False  # Downsample observations before representation network, False / "CNN" (lighter) / "resnet" (See paper appendix Network Architecture)
-        self.blocks = 1  # Number of blocks in the ResNet
-        self.channels = 16  # Number of channels in the ResNet
-        self.reduced_channels_reward = 16  # Number of channels in reward head
-        self.reduced_channels_value = 16  # Number of channels in value head
-        self.reduced_channels_policy = 16  # Number of channels in policy head
-        self.resnet_fc_reward_layers = [8]  # Define the hidden layers in the reward head of the dynamic network
-        self.resnet_fc_value_layers = [8]  # Define the hidden layers in the value head of the prediction network
-        self.resnet_fc_policy_layers = [8]  # Define the hidden layers in the policy head of the prediction network
+        self.blocks = 6  # Number of blocks in the ResNet
+        self.channels = 128  # Number of channels in the ResNet
+        self.reduced_channels_reward = 2  # Number of channels in reward head
+        self.reduced_channels_value = 2  # Number of channels in value head
+        self.reduced_channels_policy = 4  # Number of channels in policy head
+        self.resnet_fc_reward_layers = [64]  # Define the hidden layers in the reward head of the dynamic network
+        self.resnet_fc_value_layers = [64]  # Define the hidden layers in the value head of the prediction network
+        self.resnet_fc_policy_layers = [64]  # Define the hidden layers in the policy head of the prediction network
 
         # Fully Connected Network
         self.encoding_size = 32
         self.fc_representation_layers = []  # Define the hidden layers in the representation network
-        self.fc_dynamics_layers = [16]  # Define the hidden layers in the dynamics network
-        self.fc_reward_layers = [16]  # Define the hidden layers in the reward network
+        self.fc_dynamics_layers = [64]  # Define the hidden layers in the dynamics network
+        self.fc_reward_layers = [64]  # Define the hidden layers in the reward network
         self.fc_value_layers = []  # Define the hidden layers in the value network
         self.fc_policy_layers = []  # Define the hidden layers in the policy network
 
@@ -81,9 +83,9 @@ class MuZeroConfig:
         ### Training
         self.results_path = pathlib.Path(__file__).resolve().parents[1] / "results" / pathlib.Path(__file__).stem / datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
-        self.training_steps = 1000000  # Total number of training steps (ie weights update according to a batch)
-        self.batch_size = 64  # Number of parts of games to train on at each training step
-        self.checkpoint_interval = 10  # Number of training steps before using the model for self-playing
+        self.training_steps = 10000  # Total number of training steps (ie weights update according to a batch)
+        self.batch_size = 512  # Number of parts of games to train on at each training step
+        self.checkpoint_interval = 50  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
         self.train_on_gpu = torch.cuda.is_available()  # Train on GPU if available
 
@@ -92,16 +94,16 @@ class MuZeroConfig:
         self.momentum = 0.9  # Used only if optimizer is SGD
 
         # Exponential learning rate schedule
-        self.lr_init = 0.003  # Initial learning rate
-        self.lr_decay_rate = 1  # Set it to 1 to use a constant learning rate
+        self.lr_init = 0.002  # Initial learning rate
+        self.lr_decay_rate = 0.9  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 10000
 
 
 
         ### Replay Buffer
-        self.replay_buffer_size = 3000  # Number of self-play games to keep in the replay buffer
-        self.num_unroll_steps = 5  # Number of game moves to keep for every batch element
-        self.td_steps = 5  # Number of steps in the future to take into account for calculating the target value
+        self.replay_buffer_size = 10000  # Number of self-play games to keep in the replay buffer
+        self.num_unroll_steps = 17  # Number of game moves to keep for every batch element
+        self.td_steps = 17  # Number of steps in the future to take into account for calculating the target value
         self.PER = True  # Prioritized Replay (See paper appendix Training), select in priority the elements in the replay buffer which are unexpected for the network
         self.PER_alpha = 0.5  # How much prioritization is used, 0 corresponding to the uniform case, paper suggests 1
 
@@ -134,7 +136,7 @@ class Game(AbstractGame):
     """
 
     def __init__(self, seed=None):
-        self.env = Tangled_K3()
+        self.env = Tangled_P()
 
     def step(self, action):
         """
@@ -239,7 +241,7 @@ class Game(AbstractGame):
             return f"Play vertex {vertex} (action {action_number})"
 
 
-class Tangled_K3:
+class Tangled_P:
     def __init__(self):
         if args.game_variant == "tangled_K4":
             self.G = nx.complete_graph(4)
@@ -405,46 +407,7 @@ class Tangled_K3:
         return round(score, 2)  # prevent float errors
 
     def expert_action(self):
-        # board = self.board
-        # action = np.random.choice(self.legal_actions())
-        # # Horizontal and vertical checks
-        # for i in range(3):
-        #     if abs(sum(board[i, :])) == 2:
-        #         ind = np.where(board[i, :] == 0)[0][0]
-        #         action = np.ravel_multi_index(
-        #             (np.array([i]), np.array([ind])), (3, 3)
-        #         )[0]
-        #         if self.player * sum(board[i, :]) > 0:
-        #             return action
-        #
-        #     if abs(sum(board[:, i])) == 2:
-        #         ind = np.where(board[:, i] == 0)[0][0]
-        #         action = np.ravel_multi_index(
-        #             (np.array([ind]), np.array([i])), (3, 3)
-        #         )[0]
-        #         if self.player * sum(board[:, i]) > 0:
-        #             return action
-        #
-        # # Diagonal checks
-        # diag = board.diagonal()
-        # anti_diag = np.fliplr(board).diagonal()
-        # if abs(sum(diag)) == 2:
-        #     ind = np.where(diag == 0)[0][0]
-        #     action = np.ravel_multi_index(
-        #         (np.array([ind]), np.array([ind])), (3, 3)
-        #     )[0]
-        #     if self.player * sum(diag) > 0:
-        #         return action
-        #
-        # if abs(sum(anti_diag)) == 2:
-        #     ind = np.where(anti_diag == 0)[0][0]
-        #     action = np.ravel_multi_index(
-        #         (np.array([ind]), np.array([2 - ind])), (3, 3)
-        #     )[0]
-        #     if self.player * sum(anti_diag) > 0:
-        #         return action
-
-        return 0
+        return random.choice(self.legal_actions())
 
     def render(self):
         print(self.board[::-1])
