@@ -7,7 +7,9 @@ import pathlib
 import numpy as np
 import torch
 import networkx as nx
-from dwave.samplers import SimulatedAnnealingSampler
+from qubobrute.core import *
+from qubobrute.simulated_annealing import simulate_annealing_gpu
+from pyqubo import Spin
 
 from .abstract_game import AbstractGame
 
@@ -38,9 +40,9 @@ class MuZeroConfig:
 
 
         ### Self-Play
-        self.num_workers = 24  # Number of simultaneous threads/workers self-playing to feed the replay buffer
-        self.selfplay_on_gpu = False
-        self.max_moves = 8  # Maximum number of moves if game is not finished before
+        self.num_workers = 1  # Number of simultaneous threads/workers self-playing to feed the replay buffer
+        self.selfplay_on_gpu = True
+        self.max_moves = 9  # Maximum number of moves if game is not finished before
         self.num_simulations = 200  # Number of future moves self-simulated
         self.discount = 1  # Chronological discount of the reward
         self.temperature_threshold = None  # Number of moves before dropping the temperature given by visit_softmax_temperature_fn to 0 (ie selecting the best action). If None, visit_softmax_temperature_fn is used every time
@@ -84,7 +86,7 @@ class MuZeroConfig:
         self.results_path = pathlib.Path(__file__).resolve().parents[1] / "results" / pathlib.Path(__file__).stem / datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
         self.training_steps = 100000  # Total number of training steps (ie weights update according to a batch)
-        self.batch_size = 64  # Number of parts of games to train on at each training step
+        self.batch_size = 512  # Number of parts of games to train on at each training step
         self.checkpoint_interval = 10  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
         self.train_on_gpu = torch.cuda.is_available()  # Train on GPU if available
@@ -102,8 +104,8 @@ class MuZeroConfig:
 
         ### Replay Buffer
         self.replay_buffer_size = 10000  # Number of self-play games to keep in the replay buffer
-        self.num_unroll_steps = 8  # Number of game moves to keep for every batch element
-        self.td_steps = 8  # Number of steps in the future to take into account for calculating the target value
+        self.num_unroll_steps = 9  # Number of game moves to keep for every batch element
+        self.td_steps = 9  # Number of steps in the future to take into account for calculating the target value
         self.PER = True  # Prioritized Replay (See paper appendix Training), select in priority the elements in the replay buffer which are unexpected for the network
         self.PER_alpha = 0.5  # How much prioritization is used, 0 corresponding to the uniform case, paper suggests 1
 
@@ -116,7 +118,7 @@ class MuZeroConfig:
         ### Adjust the self play / training ratio to avoid over/underfitting
         self.self_play_delay = 0  # Number of seconds to wait after each played game
         self.training_delay = 0  # Number of seconds to wait after each training step
-        self.ratio = 1  # Desired training steps per self played step ratio. Equivalent to a synchronous version, training can take much longer. Set it to None to disable it
+        self.ratio = None  # Desired training steps per self played step ratio. Equivalent to a synchronous version, training can take much longer. Set it to None to disable it
         # fmt: on
 
     def visit_softmax_temperature_fn(self, trained_steps):
@@ -383,28 +385,82 @@ class Tangled_K4:
         return False
 
     def calculateScore(self):
-        adj_matrix = self.board[0, :, :-1]
-        vertices = self.board[0, :, -1]
 
-        sampler = SimulatedAnnealingSampler()
+        def qubo_energy(qubo: np.ndarray, offset: np.number, sample: np.ndarray) -> np.number:
+            """Calculate the energy of a sample."""
+            return np.dot(sample, np.dot(qubo, sample)) + offset
 
-        sampleset = sampler.sample_ising(np.zeros(self.v), adj_matrix, num_reads=int(100 * self.v ** 1.7))
+        J = self.board[0, :, :-1]
+        v = self.board[0, :, -1]
 
-        lowest = sampleset.lowest().aggregate()
-        states = np.array(lowest.record.sample, dtype=int)
+        if np.all(J == 0):
+            return 0
 
-        C = np.corrcoef(states, rowvar=False)
+        # Define binary variables
+        spins = [Spin(f'spin_{i}') for i in range(self.v)]
+
+        # Construct the Hamiltonian
+        H = 0.5 * np.sum(J * np.outer(spins, spins))
+
+        # Compile the model to a binary quadratic model (BQM)
+        model = H.compile()
+        qubo, offset = model.to_qubo(index_label=True)
+
+        if len(qubo) == 0:
+            return 0
+
+        # Determine the shape of the array (assuming you have all the indices)
+        max_row = max(index[0] for index in qubo.keys()) + 1
+        max_col = max(index[1] for index in qubo.keys()) + 1
+
+        # Initialize the 2D NumPy array with zeros
+        q = np.zeros((max_row, max_col))
+
+        # Fill the array with the values from the dictionary
+        for index, value in qubo.items():
+            q[index] = value
+
+        # brute-force
+        energies = solve_gpu(q, offset)
+
+        # Find the minimum energy
+        min_energy = energies.min()
+
+        # Find all indices with the minimum energy
+        min_indices = np.where(energies == min_energy)[0]
+
+        # Create a set to store unique solutions
+        unique_solutions = set()
+
+        for index in min_indices:
+            # Get the solution bits for the current index
+            solution = bits(index, nbits=self.v)
+
+            # Convert the solution to a tuple to make it hashable
+            solution_tuple = tuple(solution)
+
+            # Check if the solution is unique
+            if solution_tuple not in unique_solutions:
+                unique_solutions.add(solution_tuple)
+
+        # assign an equal probability of finding each of the ground states
+        prob = 1 / len(unique_solutions)
+
+        # Convert the list of lists to a 2D NumPy array
+        unique_solutions_np = np.array([list(tup) for tup in unique_solutions])
+
+        C = np.corrcoef(unique_solutions_np, rowvar=False)
 
         if type(C) is np.ndarray:
             scores = np.sum(C, axis=1) - 1
-            score = np.dot(scores, vertices)
+            score = np.dot(scores, v)
         else:
             score = 0
 
         if np.isnan(score):
             score = 0
 
-        return round(score, 2)  # prevent float errors
+        return score
 
     def expert_action(self):
         return random.choice(self.legal_actions())

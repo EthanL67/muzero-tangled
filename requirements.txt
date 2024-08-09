@@ -8,3 +8,7 @@ torch~=2.4.0
 -e git+https://github.com/EthanL67/dwave-samplers.git#egg=dwave-samplers
 networkx~=3.2.1
 matplotlib~=3.9.0
+numba~=0.60.0
+cupy~=13.2.0
+pyqubo~=1.4.0
+dimod~=0.12.16
