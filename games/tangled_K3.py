@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import networkx as nx
 from qubobrute.core import *
-from qubobrute.simulated_annealing import simulate_annealing_gpu
+from qubobrute.simulated_annealing import *
 from pyqubo import Spin
 
 from .abstract_game import AbstractGame
@@ -14,6 +14,7 @@ from .abstract_game import AbstractGame
 args = dotdict({
     'game_variant': 'tangled_K3',
 })
+
 
 class MuZeroConfig:
     def __init__(self):
@@ -23,11 +24,11 @@ class MuZeroConfig:
         self.seed = 0  # Seed for numpy, torch and the game
         self.max_num_gpus = None  # Fix the maximum number of GPUs to use. It's usually faster to use a single GPU (set it to 1) if it has enough memory. None will use every GPUs available
 
-
-
         ### Game
-        self.observation_shape = (3, 3, 4)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(3*3+3))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (3, 3,
+                                  4)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(
+            range(3 * 3 + 3))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(2))  # List of players. You should only edit the length
         self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
 
@@ -35,25 +36,21 @@ class MuZeroConfig:
         self.muzero_player = 0  # Turn Muzero begins to play (0: MuZero plays first, 1: MuZero plays second)
         self.opponent = "random"  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
 
-
-
         ### Self-Play
-        self.num_workers = 1  # Number of simultaneous threads/workers self-playing to feed the replay buffer
-        self.selfplay_on_gpu = True
+        self.num_workers = 12  # Number of simultaneous threads/workers self-playing to feed the replay buffer
+        self.selfplay_on_gpu = False
         self.max_moves = 6  # Maximum number of moves if game is not finished before
         self.num_simulations = 12  # Number of future moves self-simulated
         self.discount = 1  # Chronological discount of the reward
         self.temperature_threshold = None  # Number of moves before dropping the temperature given by visit_softmax_temperature_fn to 0 (ie selecting the best action). If None, visit_softmax_temperature_fn is used every time
 
         # Root prior exploration noise
-        self.root_dirichlet_alpha = 0.1
+        self.root_dirichlet_alpha = 0.3
         self.root_exploration_fraction = 0.25
 
         # UCB formula
         self.pb_c_base = 19652
         self.pb_c_init = 1.25
-
-
 
         ### Network
         self.network = "resnet"  # "resnet" / "fullyconnected"
@@ -78,10 +75,10 @@ class MuZeroConfig:
         self.fc_value_layers = []  # Define the hidden layers in the value network
         self.fc_policy_layers = []  # Define the hidden layers in the policy network
 
-
-
         ### Training
-        self.results_path = pathlib.Path(__file__).resolve().parents[1] / "results" / pathlib.Path(__file__).stem / datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")  # Path to store the model weights and TensorBoard logs
+        self.results_path = pathlib.Path(__file__).resolve().parents[1] / "results" / pathlib.Path(
+            __file__).stem / datetime.datetime.now().strftime(
+            "%Y-%m-%d--%H-%M-%S")  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
         self.training_steps = 100000  # Total number of training steps (ie weights update according to a batch)
         self.batch_size = 512  # Number of parts of games to train on at each training step
@@ -98,8 +95,6 @@ class MuZeroConfig:
         self.lr_decay_rate = 1  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 10000
 
-
-
         ### Replay Buffer
         self.replay_buffer_size = 3000  # Number of self-play games to keep in the replay buffer
         self.num_unroll_steps = 6  # Number of game moves to keep for every batch element
@@ -110,8 +105,6 @@ class MuZeroConfig:
         # Reanalyze (See paper appendix Reanalyse)
         self.use_last_model_value = True  # Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
         self.reanalyse_on_gpu = False
-
-
 
         ### Adjust the self play / training ratio to avoid over/underfitting
         self.self_play_delay = 0  # Number of seconds to wait after each played game
@@ -232,12 +225,12 @@ class Game(AbstractGame):
         Returns:
             String representing the action.
         """
-        if action_number < 3*self.env.e:
+        if action_number < 3 * self.env.e:
             edge = action_number // 3 + 1
             col = action_number % 3 - 1
             return f"Play edge {edge}, color {col} (action {action_number})"
         else:
-            vertex = action_number - 3*self.env.e
+            vertex = action_number - 3 * self.env.e
             return f"Play vertex {vertex} (action {action_number})"
 
 
@@ -347,7 +340,7 @@ class Tangled_K3:
             # Check open vertices
             for i in range(self.v):
                 if self.board[1, i, -1] == 1:
-                    legal.append(3*self.e + i)
+                    legal.append(3 * self.e + i)
 
         return legal
 
@@ -375,90 +368,12 @@ class Tangled_K3:
         #
         # return False
 
-        score = self.calculateScore()
+        score = calculateScore(self.board, self.v)
 
         if score * self.player > 0:
-                return True    # current player won
+            return True  # current player won
 
         return False
-
-    def calculateScore(self):
-
-        def qubo_energy(qubo: np.ndarray, offset: np.number, sample: np.ndarray) -> np.number:
-            """Calculate the energy of a sample."""
-            return np.dot(sample, np.dot(qubo, sample)) + offset
-
-        J = self.board[0, :, :-1]
-        v = self.board[0, :, -1]
-
-        if np.all(J == 0):
-            return 0
-
-        # Define binary variables
-        spins = [Spin(f'spin_{i}') for i in range(self.v)]
-
-        # Construct the Hamiltonian
-        H = 0.5 * np.sum(J * np.outer(spins, spins))
-
-        # Compile the model to a binary quadratic model (BQM)
-        model = H.compile()
-        qubo, offset = model.to_qubo(index_label=True)
-
-        if len(qubo) == 0:
-            return 0
-
-        # Determine the shape of the array (assuming you have all the indices)
-        max_row = max(index[0] for index in qubo.keys()) + 1
-        max_col = max(index[1] for index in qubo.keys()) + 1
-
-        # Initialize the 2D NumPy array with zeros
-        q = np.zeros((max_row, max_col))
-
-        # Fill the array with the values from the dictionary
-        for index, value in qubo.items():
-            q[index] = value
-
-        # brute-force
-        energies = solve_gpu(q, offset)
-
-        # Find the minimum energy
-        min_energy = energies.min()
-
-        # Find all indices with the minimum energy
-        min_indices = np.where(energies == min_energy)[0]
-
-        # Create a set to store unique solutions
-        unique_solutions = set()
-
-        for index in min_indices:
-            # Get the solution bits for the current index
-            solution = bits(index, nbits=self.v)
-
-            # Convert the solution to a tuple to make it hashable
-            solution_tuple = tuple(solution)
-
-            # Check if the solution is unique
-            if solution_tuple not in unique_solutions:
-                unique_solutions.add(solution_tuple)
-
-        # assign an equal probability of finding each of the ground states
-        prob = 1 / len(unique_solutions)
-
-        # Convert the list of lists to a 2D NumPy array
-        unique_solutions_np = np.array([list(tup) for tup in unique_solutions])
-
-        C = np.corrcoef(unique_solutions_np, rowvar=False)
-
-        if type(C) is np.ndarray:
-            scores = np.sum(C, axis=1) - 1
-            score = np.dot(scores, v)
-        else:
-            score = 0
-
-        if np.isnan(score):
-            score = 0
-
-        return score
 
     def expert_action(self):
         # board = self.board
@@ -504,3 +419,94 @@ class Tangled_K3:
 
     def render(self):
         print(self.board[::-1])
+
+
+def calculateScore(pieces: np.ndarray, v: int) -> float:
+    def qubo_energy(qubo: np.ndarray, offset: np.number, sample: np.ndarray) -> np.number:
+        """Calculate the energy of a sample."""
+        return np.dot(sample, np.dot(qubo, sample)) + offset
+
+    J = np.copy(pieces[0, :, :-1])
+
+    # Fill the diagonal with 0
+    # np.fill_diagonal(J, 0)
+    vertices = pieces[0, :, -1]
+
+    if np.all(J == 0):
+        return 0
+
+    # Define binary variables
+    spins = [Spin(f'spin_{i}') for i in range(v)]
+
+    # Construct the Hamiltonian
+    H = 0.5 * np.sum(J * np.outer(spins, spins))
+
+    # Compile the model to a binary quadratic model (BQM)
+    model = H.compile()
+    qubo, offset = model.to_qubo(index_label=True)
+
+    if len(qubo) == 0:
+        return 0
+
+    # Initialize the 2D NumPy array with zeros
+    q = np.zeros((v, v), dtype="float32")
+
+    # Fill the array with the values from the dictionary
+    for index, value in qubo.items():
+        q[index] = value
+
+    if v < 24:
+        # brute-force
+        energies = solve_cpu(q, offset)
+
+        # Find the minimum energy
+        min_energy = energies.min()
+
+        # Find all indices with the minimum energy
+        min_indices = np.where(energies == min_energy)[0]
+
+        # Create a set to store unique solutions
+        unique_solutions = set()
+
+        for index in min_indices:
+            # Get the solution bits for the current index
+            solution = bits(index, nbits=v)
+
+            # Convert the solution to a tuple to make it hashable
+            solution_tuple = tuple(solution)
+
+            # Check if the solution is unique
+            if solution_tuple not in unique_solutions:
+                unique_solutions.add(solution_tuple)
+
+    else:
+        energies, solutions = simulate_annealing(q, offset, n_iter=1000, n_samples=10000, temperature=1.0,
+                                                 cooling_rate=0.99)
+
+        # Find the minimum energy
+        min_energy = energies.min()
+
+        # Find all indices with the minimum energy
+        min_indices = np.where(energies == min_energy)[0]
+
+        # Create a set to store unique solutions
+        unique_solutions = set()
+
+        for index in min_indices:
+            # Convert the solution to a tuple to make it hashable
+            solution_tuple = tuple(solutions[index])
+            if solution_tuple not in unique_solutions:
+                unique_solutions.add(solution_tuple)
+
+    # assign an equal probability of finding each of the ground states
+    prob = 1 / len(unique_solutions)
+
+    # Convert the list of lists to a 2D NumPy array
+    unique_solutions_np = np.array([list(tup) for tup in unique_solutions])
+
+    C = np.corrcoef(unique_solutions_np, rowvar=False)
+
+    scores = np.sum(C, axis=1) - 1
+    score = np.dot(scores, vertices)
+
+    return score

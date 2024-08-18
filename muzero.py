@@ -487,9 +487,9 @@ class CPUActor:
 
     def get_initial_weights(self, config):
         model = models.MuZeroNetwork(config)
-        weigths = model.get_weights()
+        weights = model.get_weights()
         summary = str(model).replace("\n", " \n\n")
-        return weigths, summary
+        return weights, summary
 
 
 def hyperparameter_search(

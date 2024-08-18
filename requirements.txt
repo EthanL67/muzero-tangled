@@ -1,14 +1,13 @@
-gym[classic_control]~=0.26.2
-nevergrad~=1.0.3
+gym[classic_control]
+nevergrad
 numpy<2.0.0
-ray~=2.34.0
-seaborn~=0.13.2
+ray
+seaborn
 tensorboard
-torch~=2.4.0
--e git+https://github.com/EthanL67/dwave-samplers.git#egg=dwave-samplers
-networkx~=3.2.1
-matplotlib~=3.9.0
-numba~=0.60.0
-cupy~=13.2.0
-pyqubo~=1.4.0
-dimod~=0.12.16
+torch
+networkx
+matplotlib
+numba
+cupy-cuda12x
+pyqubo
+dimod
